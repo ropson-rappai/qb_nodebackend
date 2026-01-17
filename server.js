@@ -44,5 +44,51 @@ function checkEnv() {
 }
 checkEnv();
 
-// ✅ Create pool (better for production)
+// Create pool (better for production)
 const pool = mysql.createPool(dbConfig);
+
+// Press: set is_pressed = 1 and press_order = next
+app.post("/press", async (req, res) => {
+  try {
+    const { userName } = req.body;
+
+    if (!userName) {
+      return res.status(400).json({ error: "userName is required" });
+    }
+
+    // block multiple presses from same team in same round
+    const [checkRows] = await pool.execute(
+      "SELECT is_pressed FROM qb_users WHERE user_name = ?",
+      [userName]
+    );
+
+    if (checkRows.length === 0) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
+    if (checkRows[0].is_pressed === 1) {
+      return res.status(409).json({ error: "Already pressed" });
+    }
+
+    // next press order
+    const [maxOrderRows] = await pool.execute(
+      "SELECT COALESCE(MAX(press_order), 0) AS maxOrder FROM qb_users WHERE is_pressed = 1"
+    );
+
+    const nextOrder = maxOrderRows[0].maxOrder + 1;
+
+    await pool.execute(
+      `UPDATE qb_users
+       SET is_pressed = 1,
+           press_order = ?,
+           press_time = NOW()
+       WHERE user_name = ?`,
+      [nextOrder, userName]
+    );
+
+    await emitUsersUpdate();
+    return res.json({ success: true, pressOrder: nextOrder });
+  } catch (err) {
+    return res.status(500).json({ error: "Press failed" });
+  }
+});
